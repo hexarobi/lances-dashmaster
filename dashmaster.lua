@@ -34,6 +34,7 @@ if auto_updater == true then error("Invalid auto-updater lib. Please delete your
 auto_updater.run_auto_update({
     project_url="https://github.com/hexarobi/lances-dashmaster"
 })
+-- Auto Updater Complete
 
 local natives_version = "1681379138.g"
 util.require_natives(natives_version)
@@ -57,11 +58,13 @@ if not filesystem.is_dir(resources_dir) then
 end
 
 local gauge_bg = directx.create_texture(resources_dir .. '/dial.png')
+local gear_ring = directx.create_texture(resources_dir .. '/gear_ring.png')
+local redline = directx.create_texture(resources_dir .. '/redline.png')
 local needle = directx.create_texture(resources_dir .. '/needle.png')
 local wrench = directx.create_texture(resources_dir .. '/wrench.png')
 
 local gears = {}
-for i=0, 7 do 
+for i=0, 9 do 
     gears[i] = directx.create_texture(resources_dir .. '/gear_' .. tostring(i) .. '.png')
 end
 
@@ -69,12 +72,6 @@ local speed_nums = {}
 for i=0, 9 do 
     speed_nums[i] = directx.create_texture(resources_dir .. '/mph_' .. tostring(i) .. '.png')
 end
-
-local hp_nums = {}
-for i=0, 9 do 
-    hp_nums[i] = directx.create_texture(resources_dir .. '/hp_' .. tostring(i) .. '.png')
-end
-
 
 local mph_label = directx.create_texture(resources_dir .. '/mph_label.png')
 local kph_label = directx.create_texture(resources_dir .. '/kph_label.png')
@@ -90,9 +87,35 @@ local dm_x_off = 0.00
 local dm_y_off = 0.00
 local gauge_scale = 0.08
 local speed_scale = 0.06
-local hp_scale = 0.008
 
 local hud_list = menu.my_root():list('HUD', {}, '')
+local color_list = menu.my_root():list('Colors', {}, '')
+
+local gear_color = {r = 0, g = 1, b = 0.5, a = 1}
+color_list:colour("Gear color", {"dmgearcolor"}, "", gear_color, false, function(color)
+    gear_color = color
+end) 
+
+local gauge_color = {r = 0, g = 0, b = 0, a = 1}
+color_list:colour("Gauge color", {"dmgaugecolor"}, "", gauge_color, false, function(color)
+    gauge_color = color
+end) 
+
+local needle_color = {r = 1, g = 1, b = 1, a = 0.4}
+color_list:colour("Needle color", {"dmneedlecolor"}, "", gear_color, false, function(color)
+    needle_color = color
+end) 
+
+local redline_color = {r = 0.8, g = 0.03, b = 0.3, a = 1}
+color_list:colour("Redline color", {"dmredlinecolor"}, "", redline_color, false, function(color)
+    redline_color = color
+end)
+
+local speed_color = {r = 1, g = 1, b = 1, a = 1}
+color_list:colour("Speed color", {"dmspeedcolor"}, "", speed_color, false, function(color)
+    speed_color = color
+end)
+
 local cam_root = menu.my_root():list('Cameras', {}, '')
 
 hud_list:slider_float('X offset', {'dmxoff'}, '', -2000, 2000, 0, 1, function(val)
@@ -111,10 +134,6 @@ hud_list:slider_float('Speed scale', {'dmspeedscale'}, '', 0, 2000, 6, 1, functi
     speed_scale = val * 0.01 
 end)
 
-hud_list:slider_float('HP scale', {'dmhpscale'}, '', 0, 2000, 8, 1, function(val)
-    hp_scale = val * 0.001 
-end)
-
 local draw_tach = true 
 hud_list:toggle('Draw tachometer', {'dmdrawtach'}, '', function(on)
     draw_tach = on
@@ -124,11 +143,6 @@ end, true)
 local draw_speed = true 
 hud_list:toggle('Draw speed', {'dmdrawspeed'}, '', function(on)
     draw_speed = on
-end, true)
-
-local draw_hp = true 
-hud_list:toggle('Draw HP', {'dmdrawhp'}, '', function(on)
-    draw_hp = on
 end, true)
 
 
@@ -287,6 +301,53 @@ cam2_root:slider_float('Rotation speed', {'cam2rotspeed'}, '', 10, 1000, 40, 1, 
     cam2_rot_speed = val * 0.01
 end)
 
+local m_shift_up_this_frame = false 
+local m_shift_down_this_frame = false 
+
+local manual_transmission_list = menu.my_root():list("Manual Transmission simulation", {'dmmt'}, '')
+local manual_mode = false 
+manual_transmission_list:toggle('Simulate Manual Transmission', {}, '', function(on)
+    manual_mode = on
+    while true do 
+        if player_cur_car ~= 0 then 
+            local addr = entities.get_user_vehicle_as_pointer()
+            local cur_gear = entities.get_current_gear(addr)
+            local next_gear = entities.get_next_gear(addr)
+            if not manual_mode then 
+                entities.set_next_gear(addr, next_gear)
+                break 
+            end
+            if m_shift_up_this_frame then
+                if cur_gear ~= 9 then
+                    entities.set_next_gear(addr, cur_gear + 1)
+                end
+                m_shift_up_this_frame = false 
+            elseif m_shift_down_this_frame then 
+                if cur_gear > 1 then 
+                    entities.set_next_gear(addr, cur_gear - 1)
+                end
+                m_shift_down_this_frame = false 
+            else
+                entities.set_next_gear(addr, cur_gear)
+            end
+        end
+        util.yield()
+    end
+end)
+
+manual_transmission_list:action("Shift up", {'dmshiftup'}, '', function()
+    if car_hdl ~= 0 then 
+        m_shift_up_this_frame = true 
+    end
+end)
+
+manual_transmission_list:action("Shift down", {'dmshiftdown'}, '', function()
+    if car_hdl ~= 0 then 
+        m_shift_down_this_frame = true 
+    end
+end)
+
+
 
 util.create_tick_handler(function()
     if cam_2_mode then 
@@ -401,36 +462,11 @@ util.create_tick_handler(function()
         local gear_pos_y = posY - 0.005
         local gear = entities.get_current_gear(car_ptr)
         if draw_tach then 
-            directx.draw_texture(gauge_bg, gauge_scale , gauge_scale , 0.5, 0.5, posX + dm_x_off, (posY - 0.004) + dm_y_off, 0, 1.0, 1.0, 1.0, 1.0)
-            directx.draw_texture(needle, gauge_scale , gauge_scale, 0.5, 0.5, posX + dm_x_off, posY + dm_y_off, needle_rotation, 1.0, 1.0, 1.0, 0.5)
-            directx.draw_texture(gears[gear], gauge_scale , gauge_scale , 0.5, 0.5, gear_pos_x + dm_x_off, gear_pos_y + dm_y_off, 0, 1.0, 1.0, 1.0, 1)
-        end
-
-        local car_hp = math.ceil((GET_ENTITY_HEALTH(car) / GET_ENTITY_MAX_HEALTH(car)) * 100.0)
-        local car_hp_str = tostring(car_hp)
-        local car_hp_r = 0.0 
-        local car_hp_g = 1.0 
-        local car_hp_b = 0.6
-
-        if car_hp < 70 then 
-            car_hp_r = 1.0 
-            car_hp_g = 0.5 
-            car_hp_b = 0.2
-        end
-
-        if car_hp < 30 then 
-            car_hp_r = 1.0 
-            car_hp_g = 0.0
-            car_hp_b = 0.0
-        end
-
-        if draw_hp then 
-            directx.draw_texture(wrench, hp_scale - 0.003, hp_scale - 0.003, 0.5, 0.5, (gear_pos_x + 0.05) + dm_x_off, (gear_pos_y + 0.04) + dm_y_off, 0, car_hp_r, car_hp_g, car_hp_b, 1)
-            local cur_hp_num_off = hp_scale - 0.005
-            for i=1, #car_hp_str do
-                directx.draw_texture(hp_nums[tonumber(car_hp_str:sub(i,i))], hp_scale, hp_scale , 0.5, 0.5, (gear_pos_x + 0.06 + cur_hp_num_off) + dm_x_off, (gear_pos_y + 0.04) + dm_y_off, 0, car_hp_r, car_hp_g, car_hp_b, 1)
-                cur_hp_num_off += hp_scale / 1.5
-            end
+            directx.draw_texture(gauge_bg, gauge_scale , gauge_scale , 0.5, 0.5, posX + dm_x_off, (posY - 0.004) + dm_y_off, 0, gauge_color)
+            directx.draw_texture(gear_ring, gauge_scale , gauge_scale , 0.5, 0.5, posX + dm_x_off, (posY - 0.004) + dm_y_off, 0, gear_color)
+            directx.draw_texture(redline, gauge_scale , gauge_scale , 0.5, 0.5, posX + dm_x_off, (posY - 0.004) + dm_y_off, 0, redline_color)
+            directx.draw_texture(needle, gauge_scale , gauge_scale, 0.5, 0.5, posX + dm_x_off, posY + dm_y_off, needle_rotation, needle_color)
+            directx.draw_texture(gears[gear], gauge_scale , gauge_scale , 0.5, 0.5, gear_pos_x + dm_x_off, gear_pos_y + dm_y_off, 0, gear_color)
         end
 
         local speed = math.ceil(GET_ENTITY_SPEED(car_hdl))
@@ -454,12 +490,12 @@ util.create_tick_handler(function()
         local speed_str = tostring(speed)
         if draw_speed then 
             for i=1, #speed_str do
-                directx.draw_texture(speed_nums[tonumber(speed_str:sub(i,i))], speed_scale , speed_scale , 0.5, 0.5, ((posX) + cur_speed_num_offset) + dm_x_off, (posY + 0.1) + dm_y_off, 0, 1.0, 1.0, 1.0, 1)
+                directx.draw_texture(speed_nums[tonumber(speed_str:sub(i,i))], speed_scale , speed_scale , 0.5, 0.5, ((posX) + cur_speed_num_offset) + dm_x_off, (posY + 0.1) + dm_y_off, 0, speed_color)
                 cur_speed_num_offset += speed_scale / 2
             end
 
             cur_speed_num_offset += speed_scale / 5
-            directx.draw_texture(unit_text, speed_scale , speed_scale , 0.5, 0.5, ((posX) + cur_speed_num_offset) + dm_x_off, ((posY + (speed_scale)) + dm_y_off) * 1.10, 0, 1.0, 1.0, 1.0, 1)
+            directx.draw_texture(unit_text, speed_scale , speed_scale , 0.5, 0.5, ((posX) + cur_speed_num_offset) + dm_x_off, ((posY + (speed_scale)) + dm_y_off) * 1.10, 0, speed_color)
         end
 
     end
